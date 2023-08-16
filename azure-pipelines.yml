@@ -1,0 +1,133 @@
+trigger:
+- develop
+- master
+
+resources:
+ repositories:
+   - repository: IFRS9Lite_AksConfig
+     type: git
+     name: IFRS9Lite_AksConfig
+
+variables:
+  # Container registry service connection established during pipeline creation
+  dockerRegistryServiceConnection: '0ec4c73e-28b6-4210-b6e4-d35f305314a0'
+  imageRepository: 'ifrs9-lite-eir-webapi'
+  containerRegistry: 'ifrs9lite.azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.SourceBranchName)-$(Build.BuildId)'
+  local-tag: 'local-$(Build.SourceBranchName)-$(Build.BuildId)'
+
+  # Agent VM image name
+  vmImageName: 'ubuntu-latest'
+
+stages:
+- stage: CICD
+  displayName: Build and push stage
+  jobs:
+  - job: Build
+    displayName: Build
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: Docker@2
+      displayName: Build image
+      inputs:
+        command: build
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+
+    - task: Docker@2
+      displayName: Push image
+      condition: in(variables['Build.SourceBranchName'], 'master','develop')
+      inputs:
+        command: push
+        repository: $(imageRepository)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(tag)
+  - job: BuildAndPushLocalDockerImage
+    displayName: Build
+    pool:
+      vmImage: $(vmImageName)
+    steps:
+    - task: Docker@2
+      displayName: Build image
+      inputs:
+        command: build
+        repository: $(imageRepository)
+        dockerfile: $(dockerfilePath)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(local-tag)
+
+    - task: Docker@2
+      displayName: Push image
+      inputs:
+        command: push
+        repository: $(imageRepository)
+        containerRegistry: $(dockerRegistryServiceConnection)
+        tags: |
+          $(local-tag)
+
+  - job: Deploy
+    displayName: Deploy to k8s
+    dependsOn: Build
+    condition:  and(succeeded(), in(variables['Build.SourceBranchName'], 'master','develop'))
+    pool:
+      vmImage: $(vmImageName)
+    variables:
+    - ${{ if eq( variables['Build.SourceBranchName'], 'master' ) }}:
+      - group: sql-secrets-stage
+    - ${{ if eq( variables['Build.SourceBranchName'], 'develop' ) }}:
+      - group: sql-secrets-dev
+    - ${{ if eq( variables['Build.SourceBranchName'], 'master' ) }}:
+        - name: aksName
+          value: ifrs9-lite-aks-stage
+    - ${{ if eq( variables['Build.SourceBranchName'], 'develop' ) }}:
+        - name: aksName
+          value: ifrs9-lite-aks-dev
+    steps:
+    - checkout: self
+    - checkout: IFRS9Lite_AksConfig
+
+    - task: Bash@3
+      inputs:
+        targetType: 'inline'
+        script: |
+          sed -i "s/RRC_VERSION_TAG/$(tag)/g" ./IFRS9Lite_AksConfig/deployment/web-api-eir.yaml
+          sed -i "s/WEB_API_EIR_CONNECTION_STRING_VALUE/$(sql_conn_string_python)/g" ./IFRS9Lite_AksConfig/deployment/web-api-eir.yaml
+          cat ./IFRS9Lite_AksConfig/deployment/web-api-eir.yaml
+      displayName: Set Web-Api-Eir Tag
+    - task: KubectlInstaller@0
+      inputs:
+        kubectlVersion: 'latest'
+      displayName: Install kubectl
+      
+    - task: Kubernetes@1
+      inputs:
+        connectionType: 'Azure Resource Manager'
+        azureSubscriptionEndpoint: 'ifrs9-lite-dev'
+        azureResourceGroup: 'cee-pl-adv-da-ifrs9light'
+        kubernetesCluster: '$(aksName)'
+        command: 'apply'
+        arguments: '-f ./IFRS9Lite_AksConfig/deployment/web-api-eir.yaml'
+        secretType: 'dockerRegistry'
+        containerRegistryType: 'Azure Container Registry'
+        workingDirectory:
+      displayName: 'Deploy  Ifrs9-Lite-WebApi-EIR to AKS'
+
+    - task: Kubernetes@1
+      inputs:
+        connectionType: 'Azure Resource Manager'
+        azureSubscriptionEndpoint: 'ifrs9-lite-dev'
+        azureResourceGroup: 'cee-pl-adv-da-ifrs9light'
+        kubernetesCluster: '$(aksName)'
+        command: 'set'
+        arguments: 'env deployments/ifrs9-lite-web-api CURRENT_EIR_WEB_API_VERSION=$(tag)'
+        secretType: 'dockerRegistry'
+        containerRegistryType: 'Azure Container Registry'
+        outputFormat: 'none'
+      condition:  in(variables['Build.SourceBranchName'], 'master','develop')

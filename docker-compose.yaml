@@ -1,0 +1,79 @@
+# Eir-WebApi http://localhost:5000/openapi
+# WebApi http://localhost:4000/openapi/index.html
+# FrontEnd http://localhost:3005/login
+version: '3.2'
+services:
+  ifrs9-lite-webapi:
+   container_name: ifrs9-lite-webapi
+   image: ifrs9lite.azurecr.io/ifrs9-lite-web-api:develop-4782
+   ports:
+     - "4000:4000"
+   depends_on:
+     - ms-sql-db
+   restart: always
+   environment:
+     ASPNETCORE_ENVIRONMENT: "Development"
+     ASPNETCORE_URLS: "http://0.0.0.0:4000"
+     ConnectionStrings__Main: "Data Source=ms-sql-db,1433;Initial Catalog=ifrs9lite;User=sa;Password=Your_password123;Encrypt=False;TrustServerCertificate=True"
+     VersionTag: "develop-3506"
+     PythonApi__Url: "http://ifrs9-lite-eir-webapi:80"
+     SqlCommandTimeout: "601"
+     BulkBatchSize: "10001"
+     BodySizeLimit: "209715201"
+     EnableCors: "true"
+
+
+  ifrs9-lite-eir-webapi:
+      container_name: ifrs9-lite-eir-webapi
+      build: .
+      ports:
+        - "5000:80"
+      depends_on:
+        - ms-sql-db
+        - ifrs9-lite-webapi
+      restart: always
+      working_dir: /usr/src/api
+      volumes:
+      - .:/usr/src/api:ro
+      command: uvicorn src.main:app --host 0.0.0.0 --port 80 --reload
+      environment:
+        PYTHON_ROOT_PATH: "/"
+        DEVELOPMENT: "1"
+        CONNECTION_STRING: "Server=tcp:ms-sql-db,1433;Database=ifrs9lite;Persist Security Info=no;UID=sa;PWD=Your_password123;TrustServerCertificate=yes"
+
+  ifrs9-lite-frontend:
+    container_name: ifrs9-lite-frontend
+    image: ifrs9lite.azurecr.io/ifrs9-lite-fe:local-develop-4780
+    ports:
+      - "3005:80"
+    depends_on:
+      - ms-sql-db
+      - ifrs9-lite-webapi
+      - ifrs9-lite-eir-webapi
+    restart: always
+    environment:
+      REACT_APP_CURRENT_EIR_WEB_API_TAG: "local-build"
+      REACT_APP_CURRENT_WEB_API_TAG: "local-develop-3397"
+      REACT_APP_CURRENT_FRONT_END_TAG: "local-develop-3387"
+      REACT_APP_BASE_URL: "http://127.0.0.1:4000"
+      REACT_APP_EIR_JSON: "http://127.0.0.1:80"
+      REACT_APP_NODE_ENV: "development"
+      REACT_APP_TIME_ZONE: "Europe/Warsaw"
+
+  ms-sql-db:
+    container_name: ms-sql-db
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    ports:
+      - "1433:1433"
+    environment:
+      SA_PASSWORD: "Your_password123"
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+    volumes:
+      - ${PWD}/db-init/:/usr/src/app/db-init
+    restart: always
+    command: 
+    - /bin/bash
+    - -c
+    - |
+      /usr/src/app/db-init/run-initialization.sh & /opt/mssql/bin/sqlservr

@@ -1,0 +1,55 @@
+trigger: none
+
+stages:
+- stage: Build_EIR_Web_Api
+  jobs:  
+  - job: Build_IFRS9_Lite_EIR_Web_Api
+    displayName: Build-IFRS9-Lite-EIR-Web-Api
+    pool:
+      vmImage: ubuntu-latest
+    variables:
+    - name: artifactName
+      value: 'IFRS9Lite_EIR_WebApi-$(Build.BuildId)'
+    steps:
+    - task: Bash@3
+      inputs:
+        targetType: 'inline'
+        script: 'ls -1'
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(System.DefaultWorkingDirectory)'
+        artifact: '$(artifactName)'
+        publishLocation: 'pipeline'
+- stage: Deploy
+  variables:
+  - name: artifactName
+    value: 'IFRS9Lite_EIR_WebApi-$(Build.BuildId)'
+  displayName: Deploy
+  condition: succeeded()
+  jobs:
+  - job:  DeployRrcEirWebApi
+  - deployment: VMDeploy
+    environment:
+      name:  iis-vm-dev
+      resourceType: VirtualMachine
+    strategy:  
+      runOnce:
+        deploy:
+          steps:
+            - task: DownloadBuildArtifacts@1
+              inputs:
+                buildType: 'current'
+                downloadType: 'single'
+                artifactName: '$(artifactName)'
+                downloadPath: 'C:\artifacts\$(artifactName)'
+            - task: PowerShell@2
+              inputs:
+                targetType: 'inline'
+                script: 'ls C:\artifacts\$(artifactName)'
+              displayName: This pipeline artifacts dir content
+
+            - task: PowerShell@2
+              inputs:
+                targetType: 'inline'
+                script: 'ls C:\artifacts'
+              displayName: All Artifacts on VM 
